@@ -1,29 +1,45 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Structural Vector Mapping</title>
+    <title>Pro Bone Analyzer v2</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Inter', sans-serif; }
+        canvas { transform: scaleX(-1); filter: brightness(1.1) contrast(1.1); }
         video { display: none; }
-        canvas { transform: scaleX(-1); }
-        #overlay-text { 
-            position: absolute; top: 20px; left: 20px; 
-            color: rgba(0, 255, 255, 0.8); 
-            font-family: 'Courier New', monospace; font-size: 14px;
-            pointer-events: none;
+        
+        #score-panel {
+            position: absolute; right: 40px; top: 40px;
+            width: 200px; padding: 25px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            border-radius: 20px; backdrop-filter: blur(15px);
+            color: white; text-align: center;
         }
+
+        .score-title { font-size: 10px; letter-spacing: 2px; color: #0ff; margin-bottom: 5px; }
+        #total-score { font-size: 64px; font-weight: 800; color: #fff; text-shadow: 0 0 20px #0ff; }
+        .sub-metrics { margin-top: 20px; font-size: 11px; text-align: left; border-top: 1px solid #333; padding-top: 15px; }
+        .metric-row { display: flex; justify-content: space-between; margin-bottom: 8px; color: #aaa; }
+        .highlight { color: #0ff; font-weight: bold; }
     </style>
 </head>
 <body>
 
-<div id="overlay-text">
-    SYSTEM: BONE MAPPING ACTIVE<br>
-    VECTORS: JAWLINE / ZYGOMATIC / CANTHAL / NASAL
+<div id="score-panel">
+    <div class="score-title">STRUCTURAL RATING</div>
+    <div id="total-score">--</div>
+    <div class="sub-metrics">
+        <div class="metric-row">SYMMETRY <span id="sym-m" class="highlight">0%</span></div>
+        <div class="metric-row">TILT <span id="tilt-m" class="highlight">0°</span></div>
+        <div class="metric-row">MANDIBLE <span id="jaw-m" class="highlight">0%</span></div>
+    </div>
 </div>
+
 <video id="input_video"></video>
 <canvas id="output_canvas"></canvas>
 
@@ -32,56 +48,68 @@
     const canvasElement = document.getElementById('output_canvas');
     const canvasCtx = canvasElement.getContext('2d');
 
-    function drawVector(ctx, landmarks, indices, color, width = 2, closePath = false) {
-        ctx.beginPath();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = width;
+    function drawLine(landmarks, indices, color, width, glow) {
+        canvasCtx.beginPath();
+        canvasCtx.lineWidth = width;
+        canvasCtx.strokeStyle = color;
+        canvasCtx.shadowBlur = glow;
+        canvasCtx.shadowColor = color;
         indices.forEach((idx, i) => {
             const p = landmarks[idx];
-            if (i === 0) ctx.moveTo(p.x * canvasElement.width, p.y * canvasElement.height);
-            else ctx.lineTo(p.x * canvasElement.width, p.y * canvasElement.height);
+            if (i === 0) canvasCtx.moveTo(p.x * window.innerWidth, p.y * window.innerHeight);
+            else canvasCtx.lineTo(p.x * window.innerWidth, p.y * window.innerHeight);
         });
-        if (closePath) ctx.closePath();
-        ctx.stroke();
+        canvasCtx.stroke();
+        canvasCtx.shadowBlur = 0;
+    }
+
+    function calculateBoneScore(lm) {
+        // 1. Symmetry (Higher is better)
+        const symDiff = Math.abs(lm[33].y - lm[263].y) + Math.abs(lm[132].x - (1 - lm[361].x));
+        const symmetry = Math.max(0, 100 - (symDiff * 500));
+
+        // 2. Canthal Tilt (Positive is 0-5 degrees usually)
+        const leftTilt = Math.atan2(lm[33].y - lm[133].y, lm[133].x - lm[33].x) * (180 / Math.PI);
+        const tiltDisplay = Math.round(leftTilt);
+
+        // 3. Jawline Prominence (Mandibular angle depth)
+        const jawDepth = (lm[152].y - lm[58].y) * 100;
+        const jawScore = Math.min(100, jawDepth * 2.5);
+
+        // Update UI
+        document.getElementById('sym-m').innerText = `${Math.round(symmetry)}%`;
+        document.getElementById('tilt-m').innerText = `${tiltDisplay}°`;
+        document.getElementById('jaw-m').innerText = `${Math.round(jawScore)}%`;
+
+        // Weighted Total
+        const total = (symmetry * 0.4) + (Math.max(0, tiltDisplay + 5) * 4) + (jawScore * 0.3);
+        document.getElementById('total-score').innerText = Math.min(99, Math.round(total));
     }
 
     function onResults(results) {
         canvasElement.width = window.innerWidth;
         canvasElement.height = window.innerHeight;
-        
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
         canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-        
+
         if (results.multiFaceLandmarks) {
             for (const landmarks of results.multiFaceLandmarks) {
+                // Drawing high-quality vectors
+                drawLine(landmarks, [33, 133], "#00FFFF", 2, 10); // Eyes
+                drawLine(landmarks, [362, 263], "#00FFFF", 2, 10);
+                drawLine(landmarks, [58, 172, 150, 152, 379, 400, 288], "#39FF14", 3, 15); // Jaw
+                drawLine(landmarks, [123, 117, 101, 210], "#FF007F", 2, 8); // Cheek L
+                drawLine(landmarks, [352, 346, 330, 430], "#FF007F", 2, 8); // Cheek R
                 
-                // 1. JAWLINE - Strong Green (Trace from ear to ear via chin)
-                const jawIndices = [234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454];
-                drawVector(canvasCtx, landmarks, jawIndices, "#00ff44", 3);
-
-                // 2. CHEEKBONES (ZYGOMATIC ARCH) - Hot Pink
-                // Left Cheekbone prominence
-                drawVector(canvasCtx, landmarks, [127, 116, 117, 118, 101, 212, 210], "#ff00ff", 2);
-                // Right Cheekbone prominence
-                drawVector(canvasCtx, landmarks, [356, 345, 346, 347, 330, 432, 430], "#ff00ff", 2);
-
-                // 3. CANTHAL TILT - Electric Blue
-                // Left Eye (Inner to Outer)
-                drawVector(canvasCtx, landmarks, [33, 133], "#00d4ff", 2);
-                // Right Eye (Inner to Outer)
-                drawVector(canvasCtx, landmarks, [362, 263], "#00d4ff", 2);
-
-                // 4. NASAL BRIDGE & BASE - White
-                drawVector(canvasCtx, landmarks, [168, 6, 197, 195, 5, 4, 1, 2], "#ffffff", 1); // Bridge
-                drawVector(canvasCtx, landmarks, [98, 327], "#ffffff", 1); // Base Width
+                calculateBoneScore(landmarks);
             }
         }
         canvasCtx.restore();
     }
 
     const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
-    faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+    faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
     faceMesh.onResults(onResults);
 
     const camera = new Camera(videoElement, {
@@ -92,4 +120,3 @@
 </script>
 </body>
 </html>
-
